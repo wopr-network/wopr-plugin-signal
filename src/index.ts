@@ -1,0 +1,594 @@
+/**
+ * WOPR Signal Plugin - signal-cli integration
+ */
+
+import path from "node:path";
+import winston from "winston";
+import {
+  signalRpcRequest,
+  signalCheck,
+  streamSignalEvents,
+  SignalEvent,
+} from "./client.js";
+import {
+  spawnSignalDaemon,
+  waitForSignalDaemonReady,
+  SignalDaemonHandle,
+} from "./daemon.js";
+import type {
+  WOPRPlugin,
+  WOPRPluginContext,
+  ConfigSchema,
+  StreamMessage,
+  AgentIdentity,
+  ChannelInfo,
+  LogMessageOptions,
+} from "./types.js";
+
+// Signal message types
+interface SignalMessage {
+  id: string;
+  from: string;
+  fromMe: boolean;
+  timestamp: number;
+  text?: string;
+  isGroup: boolean;
+  groupId?: string;
+  groupName?: string;
+  sender?: string;
+  senderNumber?: string;
+  senderUuid?: string;
+  attachments?: Array<{
+    id: string;
+    contentType?: string;
+    filename?: string;
+    size?: number;
+  }>;
+  quote?: {
+    text?: string;
+    author?: string;
+  };
+}
+
+interface SignalConfig {
+  account?: string;
+  cliPath?: string;
+  httpHost?: string;
+  httpPort?: number;
+  httpUrl?: string;
+  autoStart?: boolean;
+  dmPolicy?: "allowlist" | "pairing" | "open" | "disabled";
+  allowFrom?: string[];
+  groupAllowFrom?: string[];
+  groupPolicy?: "allowlist" | "open" | "disabled";
+  mediaMaxMb?: number;
+  ignoreAttachments?: boolean;
+  ignoreStories?: boolean;
+  sendReadReceipts?: boolean;
+  receiveMode?: "native" | "manually";
+}
+
+// Module-level state
+let ctx: WOPRPluginContext | null = null;
+let config: SignalConfig = {};
+let agentIdentity: AgentIdentity = { name: "WOPR", emoji: "👀" };
+let daemonHandle: SignalDaemonHandle | null = null;
+let abortController: AbortController | null = null;
+let messageCache: Map<string, SignalMessage> = new Map();
+let sseRetryTimeout: NodeJS.Timeout | null = null;
+let isShuttingDown = false;
+let logger: winston.Logger;
+
+// Initialize winston logger
+function initLogger(): winston.Logger {
+  const WOPR_HOME =
+    process.env.WOPR_HOME || path.join(process.env.HOME || "~", ".wopr");
+  return winston.createLogger({
+    level: "debug",
+    format: winston.format.combine(
+      winston.format.timestamp(),
+      winston.format.errors({ stack: true }),
+      winston.format.json()
+    ),
+    defaultMeta: { service: "wopr-plugin-signal" },
+    transports: [
+      new winston.transports.File({
+        filename: path.join(WOPR_HOME, "logs", "signal-plugin-error.log"),
+        level: "error",
+      }),
+      new winston.transports.File({
+        filename: path.join(WOPR_HOME, "logs", "signal-plugin.log"),
+        level: "debug",
+      }),
+      new winston.transports.Console({
+        format: winston.format.combine(
+          winston.format.colorize(),
+          winston.format.simple()
+        ),
+        level: "warn",
+      }),
+    ],
+  });
+}
+
+// Config schema for the plugin
+const configSchema: ConfigSchema = {
+  title: "Signal Integration",
+  description: "Configure Signal integration using signal-cli",
+  fields: [
+    {
+      name: "account",
+      type: "text",
+      label: "Signal Account",
+      placeholder: "+1234567890",
+      description: "Your Signal phone number (E.164 format)",
+    },
+    {
+      name: "cliPath",
+      type: "text",
+      label: "signal-cli Path",
+      placeholder: "signal-cli",
+      default: "signal-cli",
+      description: "Path to signal-cli executable",
+    },
+    {
+      name: "httpHost",
+      type: "text",
+      label: "HTTP Host",
+      placeholder: "127.0.0.1",
+      default: "127.0.0.1",
+      description: "Host for signal-cli HTTP daemon",
+    },
+    {
+      name: "httpPort",
+      type: "number",
+      label: "HTTP Port",
+      placeholder: "8080",
+      default: 8080,
+      description: "Port for signal-cli HTTP daemon",
+    },
+    {
+      name: "autoStart",
+      type: "boolean",
+      label: "Auto-start Daemon",
+      default: true,
+      description: "Automatically start signal-cli daemon",
+    },
+    {
+      name: "dmPolicy",
+      type: "select",
+      label: "DM Policy",
+      placeholder: "pairing",
+      default: "pairing",
+      description: "How to handle direct messages",
+    },
+    {
+      name: "allowFrom",
+      type: "array",
+      label: "Allowed Senders",
+      placeholder: "+1234567890, uuid:xxx",
+      description: "Phone numbers or UUIDs allowed to DM",
+    },
+    {
+      name: "groupPolicy",
+      type: "select",
+      label: "Group Policy",
+      placeholder: "allowlist",
+      default: "allowlist",
+      description: "How to handle group messages",
+    },
+    {
+      name: "mediaMaxMb",
+      type: "number",
+      label: "Media Max Size (MB)",
+      placeholder: "8",
+      default: 8,
+      description: "Maximum attachment size in MB",
+    },
+    {
+      name: "ignoreAttachments",
+      type: "boolean",
+      label: "Ignore Attachments",
+      default: false,
+      description: "Don't download attachments",
+    },
+    {
+      name: "sendReadReceipts",
+      type: "boolean",
+      label: "Send Read Receipts",
+      default: false,
+      description: "Send read receipts for incoming messages",
+    },
+  ],
+};
+
+// Refresh identity from workspace
+async function refreshIdentity(): Promise<void> {
+  if (!ctx) return;
+  try {
+    const identity = await ctx.getAgentIdentity();
+    if (identity) {
+      agentIdentity = { ...agentIdentity, ...identity };
+      logger.info("Identity refreshed:", agentIdentity.name);
+    }
+  } catch (e) {
+    logger.warn("Failed to refresh identity:", String(e));
+  }
+}
+
+function getAckReaction(): string {
+  return agentIdentity.emoji?.trim() || "👀";
+}
+
+function getBaseUrl(): string {
+  if (config.httpUrl) return config.httpUrl;
+  const host = config.httpHost || "127.0.0.1";
+  const port = config.httpPort || 8080;
+  return `http://${host}:${port}`;
+}
+
+function normalizeE164(phone: string): string | null {
+  const cleaned = phone.replace(/[^0-9+]/g, "");
+  if (!/^\+?[0-9]+$/.test(cleaned)) return null;
+  return cleaned.startsWith("+") ? cleaned : `+${cleaned}`;
+}
+
+function isAllowed(sender: string, isGroup: boolean): boolean {
+  if (isGroup) {
+    const policy = config.groupPolicy || "allowlist";
+    if (policy === "open") return true;
+    if (policy === "disabled") return false;
+
+    const allowed = config.groupAllowFrom || config.allowFrom || [];
+    if (allowed.includes("*")) return true;
+
+    return allowed.some(
+      (id) =>
+        id === sender ||
+        id === `uuid:${sender}` ||
+        normalizeE164(id) === normalizeE164(sender)
+    );
+  } else {
+    const policy = config.dmPolicy || "pairing";
+    if (policy === "open") return true;
+    if (policy === "disabled") return false;
+    if (policy === "pairing") {
+      // In pairing mode, all unknown senders get a pairing request
+      return true;
+    }
+
+    // allowlist mode
+    const allowed = config.allowFrom || [];
+    if (allowed.includes("*")) return true;
+
+    return allowed.some(
+      (id) =>
+        id === sender ||
+        id === `uuid:${sender}` ||
+        normalizeE164(id) === normalizeE164(sender)
+    );
+  }
+}
+
+function parseSignalEvent(event: SignalEvent): SignalMessage | null {
+  if (!event.data) return null;
+
+  try {
+    const data = JSON.parse(event.data);
+
+    // Only handle message events
+    if (event.event !== "message") return null;
+
+    const envelope = data.envelope;
+    if (!envelope) return null;
+
+    // Skip our own messages
+    if (envelope.source === config.account) return null;
+
+    const timestamp = envelope.timestamp || Date.now();
+    const messageId = `${timestamp}-${envelope.source}`;
+
+    let text = "";
+    let attachments: SignalMessage["attachments"] = [];
+    let quote: SignalMessage["quote"] | undefined;
+
+    const dataMessage = envelope.dataMessage;
+    if (dataMessage) {
+      text = dataMessage.message || "";
+
+      if (dataMessage.attachments) {
+        attachments = dataMessage.attachments.map((att: any) => ({
+          id: att.id,
+          contentType: att.contentType,
+          filename: att.filename,
+          size: att.size,
+        }));
+      }
+
+      if (dataMessage.quote) {
+        quote = {
+          text: dataMessage.quote.text,
+          author: dataMessage.quote.author,
+        };
+      }
+    }
+
+    const syncMessage = envelope.syncMessage;
+    if (syncMessage?.sentMessage) {
+      // This is a sync of our own sent message, skip
+      return null;
+    }
+
+    const isGroup = Boolean(dataMessage?.groupInfo?.groupId);
+    const groupId = dataMessage?.groupInfo?.groupId;
+
+    return {
+      id: messageId,
+      from: envelope.source,
+      fromMe: false,
+      timestamp,
+      text,
+      isGroup,
+      groupId,
+      sender: envelope.sourceName || envelope.source,
+      senderNumber: envelope.sourceNumber,
+      senderUuid: envelope.sourceUuid,
+      attachments,
+      quote,
+    };
+  } catch (err) {
+    logger.error("Failed to parse Signal event:", err);
+    return null;
+  }
+}
+
+async function handleIncomingMessage(msg: SignalMessage): Promise<void> {
+  if (!ctx) return;
+
+  // Check if sender is allowed
+  if (!isAllowed(msg.from, msg.isGroup)) {
+    logger.info(`Message from ${msg.from} blocked by policy`);
+    return;
+  }
+
+  // Build channel info
+  const channelId = msg.isGroup && msg.groupId ? `group:${msg.groupId}` : msg.from;
+  const channelInfo: ChannelInfo = {
+    type: "signal",
+    id: channelId,
+    name: msg.isGroup ? "Signal Group" : "Signal DM",
+  };
+
+  // Log for context
+  const logOptions: LogMessageOptions = {
+    from: msg.sender || msg.from,
+    channel: channelInfo,
+  };
+
+  const sessionKey = `signal-${channelId}`;
+  ctx.logMessage(sessionKey, msg.text || "[media]", logOptions);
+
+  // Cache message for reaction handling
+  messageCache.set(msg.id, msg);
+
+  // Inject to WOPR
+  await injectMessage(msg, sessionKey);
+}
+
+async function injectMessage(
+  signalMsg: SignalMessage,
+  sessionKey: string
+): Promise<void> {
+  if (!ctx || !signalMsg.text) return;
+
+  const prefix = `[${signalMsg.sender || "Signal User"}]: `;
+  const messageWithPrefix = prefix + signalMsg.text;
+
+  const channelInfo: ChannelInfo = {
+    type: "signal",
+    id: signalMsg.isGroup && signalMsg.groupId ? `group:${signalMsg.groupId}` : signalMsg.from,
+    name: signalMsg.isGroup ? "Signal Group" : "Signal DM",
+  };
+
+  const response = await ctx.inject(sessionKey, messageWithPrefix, {
+    from: signalMsg.sender || signalMsg.from,
+    channel: channelInfo,
+  });
+
+  // Send response
+  const target = signalMsg.isGroup && signalMsg.groupId
+    ? `group:${signalMsg.groupId}`
+    : signalMsg.from;
+
+  await sendMessageInternal(target, response);
+}
+
+async function sendMessageInternal(
+  to: string,
+  text: string,
+  opts?: { mediaUrl?: string }
+): Promise<void> {
+  const baseUrl = getBaseUrl();
+  const account = config.account;
+
+  // Parse target
+  let targetType: "recipient" | "group" = "recipient";
+  let recipient: string | undefined;
+  let groupId: string | undefined;
+
+  if (to.toLowerCase().startsWith("group:")) {
+    targetType = "group";
+    groupId = to.slice(6);
+  } else {
+    recipient = to;
+  }
+
+  // Build params
+  const params: Record<string, any> = {
+    message: text,
+  };
+
+  if (account) params.account = account;
+  if (targetType === "group") {
+    params.groupId = groupId;
+  } else {
+    params.recipient = [recipient];
+  }
+
+  if (opts?.mediaUrl) {
+    params.attachments = [opts.mediaUrl];
+  }
+
+  await signalRpcRequest("send", params, { baseUrl });
+}
+
+async function runSseLoop(): Promise<void> {
+  if (isShuttingDown) return;
+
+  const baseUrl = getBaseUrl();
+  abortController = new AbortController();
+
+  try {
+    logger.info("Starting Signal SSE stream...");
+
+    await streamSignalEvents({
+      baseUrl,
+      account: config.account,
+      abortSignal: abortController.signal,
+      onEvent: (event) => {
+        const msg = parseSignalEvent(event);
+        if (msg) {
+          handleIncomingMessage(msg).catch((err) => {
+            logger.error("Error handling Signal message:", err);
+          });
+        }
+      },
+    });
+  } catch (err) {
+    if (isShuttingDown) return;
+
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    logger.error("Signal SSE error:", errorMsg);
+
+    // Retry with exponential backoff
+    const retryDelay = Math.min(5000 * Math.pow(2, (sseRetryTimeout ? 1 : 0)), 30000);
+    logger.info(`Retrying SSE connection in ${retryDelay}ms...`);
+
+    sseRetryTimeout = setTimeout(() => {
+      if (!isShuttingDown) {
+        runSseLoop().catch((err) => {
+          logger.error("Fatal SSE loop error:", err);
+        });
+      }
+    }, retryDelay);
+  }
+}
+
+async function startSignal(): Promise<void> {
+  const baseUrl = getBaseUrl();
+
+  // Check if already running
+  const check = await signalCheck(baseUrl, 2000);
+  if (check.ok) {
+    logger.info("Signal daemon already running");
+    await runSseLoop();
+    return;
+  }
+
+  // Auto-start if enabled
+  if (config.autoStart !== false) {
+    logger.info("Starting Signal daemon...");
+
+    daemonHandle = spawnSignalDaemon({
+      cliPath: config.cliPath || "signal-cli",
+      account: config.account,
+      httpHost: config.httpHost || "127.0.0.1",
+      httpPort: config.httpPort || 8080,
+      receiveMode: config.receiveMode,
+      ignoreAttachments: config.ignoreAttachments,
+      ignoreStories: config.ignoreStories,
+      sendReadReceipts: config.sendReadReceipts,
+      runtime: {
+        log: (msg) => logger.info(msg),
+        error: (msg) => logger.error(msg),
+      },
+    });
+
+    logger.info(`Signal daemon started (PID: ${daemonHandle.pid})`);
+
+    // Wait for daemon to be ready
+    await waitForSignalDaemonReady(baseUrl, 30000, {
+      log: (msg) => logger.info(msg),
+      error: (msg) => logger.error(msg),
+    });
+
+    // Start SSE loop
+    await runSseLoop();
+  } else {
+    logger.error(
+      "Signal daemon not running and auto-start disabled. Please start signal-cli manually."
+    );
+    throw new Error("Signal daemon not available");
+  }
+}
+
+// Plugin definition
+const plugin: WOPRPlugin = {
+  name: "signal",
+  version: "1.0.0",
+  description: "Signal integration using signal-cli",
+
+  async init(context: WOPRPluginContext): Promise<void> {
+    ctx = context;
+    config = (context.getConfig() || {}) as SignalConfig;
+
+    // Initialize logger
+    logger = initLogger();
+
+    // Register config schema
+    ctx.registerConfigSchema("signal", configSchema);
+
+    // Refresh identity
+    await refreshIdentity();
+
+    // Validate config
+    if (!config.account) {
+      logger.warn(
+        "No Signal account configured. Run 'wopr configure --plugin signal' to set up."
+      );
+      return;
+    }
+
+    // Start Signal
+    try {
+      await startSignal();
+    } catch (err) {
+      logger.error("Failed to start Signal:", err);
+      // Don't throw - let plugin load but log the error
+    }
+  },
+
+  async shutdown(): Promise<void> {
+    isShuttingDown = true;
+
+    if (sseRetryTimeout) {
+      clearTimeout(sseRetryTimeout);
+      sseRetryTimeout = null;
+    }
+
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
+
+    if (daemonHandle) {
+      logger.info("Stopping Signal daemon...");
+      daemonHandle.stop();
+      daemonHandle = null;
+    }
+
+    ctx = null;
+  },
+};
+
+export default plugin;

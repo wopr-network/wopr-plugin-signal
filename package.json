@@ -1,0 +1,36 @@
+{
+  "name": "wopr-plugin-signal",
+  "version": "1.0.0",
+  "description": "Signal plugin for WOPR using signal-cli",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint src/**/*.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "wopr",
+    "wopr-plugin",
+    "signal",
+    "signal-cli",
+    "messaging"
+  ],
+  "author": "TSavo",
+  "license": "MIT",
+  "peerDependencies": {
+    "wopr": "^2.0.0"
+  },
+  "dependencies": {
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "dist/**/*",
+    "IDENTITY.md"
+  ]
+}
