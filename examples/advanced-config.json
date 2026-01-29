@@ -1,0 +1,88 @@
+{
+  "$schema": "https://raw.githubusercontent.com/TSavo/wopr/main/schemas/config.json",
+  "_description": "Advanced configuration for wopr-plugin-signal",
+  "_documentation": "https://github.com/TSavo/wopr-plugin-signal/blob/main/docs/CONFIGURATION.md",
+  
+  "channels": {
+    "signal": {
+      "_comment": "Full-featured production configuration",
+      
+      "account": "+1234567890",
+      "_account_note": "Your Signal phone number in E.164 format (required)",
+      
+      "cliPath": "/usr/local/bin/signal-cli",
+      "_cliPath_note": "Absolute path to signal-cli executable",
+      
+      "httpHost": "127.0.0.1",
+      "_httpHost_note": "Bind daemon to localhost only (security)",
+      
+      "httpPort": 8080,
+      "_httpPort_note": "Port for signal-cli HTTP daemon",
+      
+      "autoStart": true,
+      "_autoStart_note": "Automatically start signal-cli daemon on plugin load",
+      
+      "receiveMode": "native",
+      "_receiveMode_note": "Use native receive mode for real-time messages",
+      
+      "dmPolicy": "allowlist",
+      "_dmPolicy_note": "Security: Only allow messages from allowFrom list",
+      
+      "allowFrom": [
+        "+15555550123",
+        "+15555550456",
+        "+15555550789",
+        "uuid:123e4567-e89b-12d3-a456-426614174000"
+      ],
+      "_allowFrom_note": "List of allowed phone numbers or UUIDs",
+      
+      "groupPolicy": "allowlist",
+      "_groupPolicy_note": "Security: Only allow specific groups",
+      
+      "groupAllowFrom": [
+        "group:abc123def456789==",
+        "group:xyz789uvw012345=="
+      ],
+      "_groupAllowFrom_note": "List of allowed group IDs (base64 encoded)",
+      
+      "mediaMaxMb": 16,
+      "_mediaMaxMb_note": "Maximum attachment size in megabytes",
+      
+      "ignoreAttachments": false,
+      "_ignoreAttachments_note": "Set to true to skip all attachments",
+      
+      "ignoreStories": true,
+      "_ignoreStories_note": "Ignore Signal story updates (reduces noise)",
+      
+      "sendReadReceipts": true,
+      "_sendReadReceipts_note": "Send read receipts for received messages"
+    }
+  },
+  
+  "_alternative_configs": {
+    "open_development": {
+      "_comment": "Open configuration for development/testing",
+      "dmPolicy": "open",
+      "groupPolicy": "open",
+      "sendReadReceipts": false,
+      "ignoreStories": false
+    },
+    
+    "high_security": {
+      "_comment": "Maximum security configuration",
+      "dmPolicy": "allowlist",
+      "allowFrom": ["+15555550123"],
+      "groupPolicy": "disabled",
+      "ignoreAttachments": true,
+      "ignoreStories": true,
+      "sendReadReceipts": false
+    },
+    
+    "docker_setup": {
+      "_comment": "Configuration when running signal-cli in Docker",
+      "httpUrl": "http://signal-cli:8080",
+      "autoStart": false,
+      "_note": "autoStart should be false when daemon runs in separate container"
+    }
+  }
+}

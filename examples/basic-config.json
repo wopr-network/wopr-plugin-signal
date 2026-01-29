@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/TSavo/wopr/main/schemas/config.json",
+  "_description": "Basic configuration for wopr-plugin-signal",
+  "_documentation": "https://github.com/TSavo/wopr-plugin-signal/blob/main/docs/CONFIGURATION.md",
+  
+  "channels": {
+    "signal": {
+      "_comment": "Minimal working configuration for Signal integration",
+      
+      "account": "+1234567890",
+      "_account_note": "Your Signal phone number in E.164 format (required)",
+      
+      "autoStart": true,
+      "_autoStart_note": "Automatically start signal-cli daemon",
+      
+      "dmPolicy": "pairing",
+      "_dmPolicy_note": "Allow pairing requests from new users"
+    }
+  }
+}
