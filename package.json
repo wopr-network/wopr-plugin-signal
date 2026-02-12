@@ -28,7 +28,7 @@
     "wopr": "^2.0.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist && tsc",
     "check": "biome check src/ && tsc --noEmit",
     "format": "biome format --write src/",
     "lint": "eslint src/**/*.ts",
