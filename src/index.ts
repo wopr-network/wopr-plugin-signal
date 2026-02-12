@@ -19,11 +19,9 @@ import type {
   WOPRPlugin,
   WOPRPluginContext,
   ConfigSchema,
-  StreamMessage,
   AgentIdentity,
-  ChannelInfo,
-  LogMessageOptions,
-} from "./types.js";
+  ChannelRef,
+} from "@wopr-network/plugin-types";
 
 // Signal message types
 interface SignalMessage {
@@ -353,14 +351,14 @@ async function handleIncomingMessage(msg: SignalMessage): Promise<void> {
 
   // Build channel info
   const channelId = msg.isGroup && msg.groupId ? `group:${msg.groupId}` : msg.from;
-  const channelInfo: ChannelInfo = {
+  const channelInfo: ChannelRef = {
     type: "signal",
     id: channelId,
     name: msg.isGroup ? "Signal Group" : "Signal DM",
   };
 
   // Log for context
-  const logOptions: LogMessageOptions = {
+  const logOptions = {
     from: msg.sender || msg.from,
     channel: channelInfo,
   };
@@ -384,7 +382,7 @@ async function injectMessage(
   const prefix = `[${signalMsg.sender || "Signal User"}]: `;
   const messageWithPrefix = prefix + signalMsg.text;
 
-  const channelInfo: ChannelInfo = {
+  const channelInfo: ChannelRef = {
     type: "signal",
     id: signalMsg.isGroup && signalMsg.groupId ? `group:${signalMsg.groupId}` : signalMsg.from,
     name: signalMsg.isGroup ? "Signal Group" : "Signal DM",
