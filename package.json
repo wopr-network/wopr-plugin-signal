@@ -1,6 +1,7 @@
 {
   "author": "TSavo",
   "dependencies": {
+    "@wopr-network/plugin-types": "^0.1.0",
     "winston": "^3.11.0"
   },
   "description": "Signal plugin for WOPR using signal-cli",
