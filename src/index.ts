@@ -94,11 +94,11 @@ const signalChannelProvider: ChannelProvider = {
   id: "signal",
 
   registerCommand(cmd: ChannelCommand): void {
-    registeredCommands.set(cmd.name, cmd);
+    registeredCommands.set(cmd.name.toLowerCase(), cmd);
   },
 
   unregisterCommand(name: string): void {
-    registeredCommands.delete(name);
+    registeredCommands.delete(name.toLowerCase());
   },
 
   getCommands(): ChannelCommand[] {
@@ -452,17 +452,27 @@ async function handleIncomingMessage(msg: SignalMessage): Promise<void> {
         reply: (reply: string) => sendMessageInternal(channelId, reply),
         getBotUsername: () => config.account || "signal-bot",
       };
-      await cmd.handler(cmdCtx);
+      try {
+        await cmd.handler(cmdCtx);
+      } catch (err) {
+        logger.error(`Command handler '${cmdName}' threw:`, err);
+      }
       return;
     }
   }
 
   // Run registered message parsers
   for (const parser of registeredParsers.values()) {
-    const matches =
-      typeof parser.pattern === "function"
-        ? parser.pattern(text)
-        : parser.pattern.test(text);
+    let matches = false;
+    try {
+      matches =
+        typeof parser.pattern === "function"
+          ? parser.pattern(text)
+          : parser.pattern.test(text);
+    } catch (err) {
+      logger.error(`Parser '${parser.id}' pattern threw:`, err);
+      continue;
+    }
     if (matches) {
       const parserCtx: ChannelMessageContext = {
         channel: channelId,
@@ -472,7 +482,11 @@ async function handleIncomingMessage(msg: SignalMessage): Promise<void> {
         reply: (reply: string) => sendMessageInternal(channelId, reply),
         getBotUsername: () => config.account || "signal-bot",
       };
-      await parser.handler(parserCtx);
+      try {
+        await parser.handler(parserCtx);
+      } catch (err) {
+        logger.error(`Parser '${parser.id}' handler threw:`, err);
+      }
       return;
     }
   }
@@ -695,7 +709,7 @@ const plugin: WOPRPlugin = {
 
     // Unregister channel provider
     if (ctx) {
-      ctx.unregisterChannelProvider("signal");
+      ctx.unregisterChannelProvider(signalChannelProvider.id);
     }
 
     // Clear registered commands and parsers
