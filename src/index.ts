@@ -15,6 +15,12 @@ import {
   waitForSignalDaemonReady,
   SignalDaemonHandle,
 } from "./daemon.js";
+import {
+  initWebMCP,
+  teardownWebMCP,
+  webmcpToolDeclarations,
+  getWebMCPHandlers,
+} from "./webmcp.js";
 import type {
   WOPRPlugin,
   WOPRPluginContext,
@@ -253,7 +259,7 @@ const configSchema: ConfigSchema = {
 // Plugin Manifest
 // ============================================================================
 
-const pluginManifest: PluginManifest = {
+const pluginManifest: PluginManifest & { webmcpTools?: typeof webmcpToolDeclarations } = {
   name: "@wopr-network/plugin-signal",
   version: "1.0.0",
   description: "Signal integration using signal-cli",
@@ -266,6 +272,7 @@ const pluginManifest: PluginManifest = {
     network: { outbound: true },
   },
   configSchema,
+  webmcpTools: webmcpToolDeclarations,
 };
 
 // Refresh identity from workspace
@@ -684,6 +691,14 @@ const plugin: WOPRPlugin = {
     // Register as a channel provider so other plugins can add commands/parsers
     ctx.registerChannelProvider(signalChannelProvider);
 
+    // Initialize WebMCP tools with read-only access to plugin state
+    initWebMCP({
+      getBaseUrl,
+      getAccount: () => config.account,
+      getMessageCache: () => messageCache,
+      isConnected: () => !isShuttingDown && abortController !== null,
+    });
+
     // Refresh identity
     await refreshIdentity();
 
@@ -706,6 +721,9 @@ const plugin: WOPRPlugin = {
 
   async shutdown(): Promise<void> {
     isShuttingDown = true;
+
+    // Teardown WebMCP tools
+    teardownWebMCP();
 
     // Unregister channel provider
     if (ctx) {
@@ -743,6 +761,7 @@ export {
   configSchema,
   signalChannelProvider,
   pluginManifest,
+  getWebMCPHandlers,
 };
 export type { SignalConfig, SignalMessage };
 
