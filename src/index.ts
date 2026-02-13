@@ -589,4 +589,12 @@ const plugin: WOPRPlugin = {
   },
 };
 
+// Named exports for testing
+export {
+  normalizeE164,
+  parseSignalEvent,
+  configSchema,
+};
+export type { SignalConfig, SignalMessage };
+
 export default plugin;
