@@ -21,6 +21,12 @@ import type {
   ConfigSchema,
   AgentIdentity,
   ChannelRef,
+  ChannelCommand,
+  ChannelCommandContext,
+  ChannelMessageContext,
+  ChannelMessageParser,
+  ChannelProvider,
+  PluginManifest,
 } from "@wopr-network/plugin-types";
 
 // Signal message types
@@ -76,6 +82,49 @@ let messageCache: Map<string, SignalMessage> = new Map();
 let sseRetryTimeout: NodeJS.Timeout | null = null;
 let isShuttingDown = false;
 let logger: winston.Logger;
+
+// ============================================================================
+// Channel Provider — allows other plugins to register commands and parsers
+// ============================================================================
+
+const registeredCommands: Map<string, ChannelCommand> = new Map();
+const registeredParsers: Map<string, ChannelMessageParser> = new Map();
+
+const signalChannelProvider: ChannelProvider = {
+  id: "signal",
+
+  registerCommand(cmd: ChannelCommand): void {
+    registeredCommands.set(cmd.name, cmd);
+  },
+
+  unregisterCommand(name: string): void {
+    registeredCommands.delete(name);
+  },
+
+  getCommands(): ChannelCommand[] {
+    return Array.from(registeredCommands.values());
+  },
+
+  addMessageParser(parser: ChannelMessageParser): void {
+    registeredParsers.set(parser.id, parser);
+  },
+
+  removeMessageParser(id: string): void {
+    registeredParsers.delete(id);
+  },
+
+  getMessageParsers(): ChannelMessageParser[] {
+    return Array.from(registeredParsers.values());
+  },
+
+  async send(channel: string, content: string): Promise<void> {
+    await sendMessageInternal(channel, content);
+  },
+
+  getBotUsername(): string {
+    return config.account || "signal-bot";
+  },
+};
 
 // Initialize winston logger
 function initLogger(): winston.Logger {
@@ -198,6 +247,25 @@ const configSchema: ConfigSchema = {
       description: "Send read receipts for incoming messages",
     },
   ],
+};
+
+// ============================================================================
+// Plugin Manifest
+// ============================================================================
+
+const pluginManifest: PluginManifest = {
+  name: "@wopr-network/plugin-signal",
+  version: "1.0.0",
+  description: "Signal integration using signal-cli",
+  capabilities: ["channel"],
+  category: "channel",
+  tags: ["signal", "messaging", "channel"],
+  icon: "\uD83D\uDCF1",
+  requires: {
+    bins: ["signal-cli"],
+    network: { outbound: true },
+  },
+  configSchema,
 };
 
 // Refresh identity from workspace
@@ -356,6 +424,58 @@ async function handleIncomingMessage(msg: SignalMessage): Promise<void> {
     id: channelId,
     name: msg.isGroup ? "Signal Group" : "Signal DM",
   };
+
+  // Emit channel:message event for other plugins
+  if (ctx.events) {
+    ctx.events.emit("channel:message", {
+      channel: { type: "signal", id: channelId, name: channelInfo.name },
+      message: msg.text || "[media]",
+      from: msg.sender || msg.from,
+    }).catch((err) => {
+      logger.error("Failed to emit channel:message event:", err);
+    });
+  }
+
+  const text = msg.text || "";
+
+  // Check registered channel commands (e.g., !command args)
+  if (text.startsWith("!")) {
+    const parts = text.slice(1).split(/\s+/);
+    const cmdName = parts[0]?.toLowerCase();
+    const cmd = cmdName ? registeredCommands.get(cmdName) : undefined;
+    if (cmd) {
+      const cmdCtx: ChannelCommandContext = {
+        channel: channelId,
+        channelType: "signal",
+        sender: msg.sender || msg.from,
+        args: parts.slice(1),
+        reply: (reply: string) => sendMessageInternal(channelId, reply),
+        getBotUsername: () => config.account || "signal-bot",
+      };
+      await cmd.handler(cmdCtx);
+      return;
+    }
+  }
+
+  // Run registered message parsers
+  for (const parser of registeredParsers.values()) {
+    const matches =
+      typeof parser.pattern === "function"
+        ? parser.pattern(text)
+        : parser.pattern.test(text);
+    if (matches) {
+      const parserCtx: ChannelMessageContext = {
+        channel: channelId,
+        channelType: "signal",
+        sender: msg.sender || msg.from,
+        content: text,
+        reply: (reply: string) => sendMessageInternal(channelId, reply),
+        getBotUsername: () => config.account || "signal-bot",
+      };
+      await parser.handler(parserCtx);
+      return;
+    }
+  }
 
   // Log for context
   const logOptions = {
@@ -535,6 +655,7 @@ const plugin: WOPRPlugin = {
   name: "signal",
   version: "1.0.0",
   description: "Signal integration using signal-cli",
+  manifest: pluginManifest,
 
   async init(context: WOPRPluginContext): Promise<void> {
     ctx = context;
@@ -545,6 +666,9 @@ const plugin: WOPRPlugin = {
 
     // Register config schema
     ctx.registerConfigSchema("signal", configSchema);
+
+    // Register as a channel provider so other plugins can add commands/parsers
+    ctx.registerChannelProvider(signalChannelProvider);
 
     // Refresh identity
     await refreshIdentity();
@@ -568,6 +692,15 @@ const plugin: WOPRPlugin = {
 
   async shutdown(): Promise<void> {
     isShuttingDown = true;
+
+    // Unregister channel provider
+    if (ctx) {
+      ctx.unregisterChannelProvider("signal");
+    }
+
+    // Clear registered commands and parsers
+    registeredCommands.clear();
+    registeredParsers.clear();
 
     if (sseRetryTimeout) {
       clearTimeout(sseRetryTimeout);
@@ -594,6 +727,8 @@ export {
   normalizeE164,
   parseSignalEvent,
   configSchema,
+  signalChannelProvider,
+  pluginManifest,
 };
 export type { SignalConfig, SignalMessage };
 
