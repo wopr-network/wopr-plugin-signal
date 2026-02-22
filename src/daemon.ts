@@ -2,7 +2,7 @@
  * Signal CLI Daemon Management
  */
 
-import { spawn, ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { signalCheck } from "./client.js";
 
 export interface SignalDaemonOptions {

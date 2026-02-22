@@ -3,37 +3,37 @@
  */
 
 import path from "node:path";
-import winston from "winston";
-import {
-	signalRpcRequest,
-	signalCheck,
-	streamSignalEvents,
-	SignalEvent,
-} from "./client.js";
-import {
-	spawnSignalDaemon,
-	waitForSignalDaemonReady,
-	SignalDaemonHandle,
-} from "./daemon.js";
-import {
-	initWebMCP,
-	teardownWebMCP,
-	webmcpToolDeclarations,
-	getWebMCPHandlers,
-} from "./webmcp.js";
 import type {
-	WOPRPlugin,
-	WOPRPluginContext,
-	ConfigSchema,
 	AgentIdentity,
-	ChannelRef,
 	ChannelCommand,
 	ChannelCommandContext,
 	ChannelMessageContext,
 	ChannelMessageParser,
 	ChannelProvider,
+	ChannelRef,
+	ConfigSchema,
 	PluginManifest,
+	WOPRPlugin,
+	WOPRPluginContext,
 } from "@wopr-network/plugin-types";
+import winston from "winston";
+import {
+	type SignalEvent,
+	signalCheck,
+	signalRpcRequest,
+	streamSignalEvents,
+} from "./client.js";
+import {
+	type SignalDaemonHandle,
+	spawnSignalDaemon,
+	waitForSignalDaemonReady,
+} from "./daemon.js";
+import {
+	getWebMCPHandlers,
+	initWebMCP,
+	teardownWebMCP,
+	webmcpToolDeclarations,
+} from "./webmcp.js";
 
 // Signal message types
 interface SignalMessage {
@@ -84,7 +84,7 @@ let config: SignalConfig = {};
 let agentIdentity: AgentIdentity = { name: "WOPR", emoji: "👀" };
 let daemonHandle: SignalDaemonHandle | null = null;
 let abortController: AbortController | null = null;
-let messageCache: Map<string, SignalMessage> = new Map();
+const messageCache: Map<string, SignalMessage> = new Map();
 let sseRetryTimeout: NodeJS.Timeout | null = null;
 let isShuttingDown = false;
 let logger: winston.Logger;
@@ -291,7 +291,7 @@ async function refreshIdentity(): Promise<void> {
 	}
 }
 
-function getAckReaction(): string {
+function _getAckReaction(): string {
 	return agentIdentity.emoji?.trim() || "👀";
 }
 
@@ -619,10 +619,7 @@ async function runSseLoop(): Promise<void> {
 		logger.error("Signal SSE error:", errorMsg);
 
 		// Retry with exponential backoff
-		const retryDelay = Math.min(
-			5000 * Math.pow(2, sseRetryTimeout ? 1 : 0),
-			30000,
-		);
+		const retryDelay = Math.min(5000 * 2 ** (sseRetryTimeout ? 1 : 0), 30000);
 		logger.info(`Retrying SSE connection in ${retryDelay}ms...`);
 
 		sseRetryTimeout = setTimeout(() => {
