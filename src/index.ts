@@ -279,7 +279,6 @@ const pluginManifest: PluginManifest & {
 				type: "channel",
 				id: "signal",
 				displayName: "Signal Messenger",
-				tier: "byok" as const,
 			},
 		],
 	},
@@ -769,6 +768,9 @@ const plugin: WOPRPlugin = {
 
 		// Teardown WebMCP tools
 		teardownWebMCP();
+
+		// Unregister config schema
+		if (ctx.unregisterConfigSchema) ctx.unregisterConfigSchema("signal");
 
 		// Unregister channel provider
 		ctx.unregisterChannelProvider(signalChannelProvider.id);

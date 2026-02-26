@@ -12,7 +12,6 @@ describe("pluginManifest", () => {
       type: "channel",
       id: "signal",
       displayName: expect.any(String),
-      tier: expect.stringMatching(/^(wopr|branded|byok)$/),
     });
   });
 
