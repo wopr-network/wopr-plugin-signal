@@ -105,11 +105,11 @@ export async function signalCheck(
 			return { ok: false, status: res.status, error: `HTTP ${res.status}` };
 		}
 		return { ok: true, status: res.status, error: null };
-	} catch (err) {
+	} catch (error: unknown) {
 		return {
 			ok: false,
 			status: null,
-			error: err instanceof Error ? err.message : String(err),
+			error: error instanceof Error ? error.message : String(error),
 		};
 	}
 }

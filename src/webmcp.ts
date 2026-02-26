@@ -91,7 +91,7 @@ async function getSignalStatus(): Promise<Record<string, unknown>> {
 		if (Array.isArray(result)) {
 			accounts = result;
 		}
-	} catch {
+	} catch (_error: unknown) {
 		// listAccounts may not be supported in all signal-cli versions
 	}
 
