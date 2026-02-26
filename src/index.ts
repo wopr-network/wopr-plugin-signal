@@ -273,6 +273,16 @@ const pluginManifest: PluginManifest & {
 		bins: ["signal-cli"],
 		network: { outbound: true },
 	},
+	provides: {
+		capabilities: [
+			{
+				type: "channel",
+				id: "signal",
+				displayName: "Signal Messenger",
+			},
+		],
+	},
+	lifecycle: { shutdownBehavior: "graceful" as const },
 	configSchema,
 	webmcpTools: webmcpToolDeclarations,
 };
@@ -286,8 +296,8 @@ async function refreshIdentity(): Promise<void> {
 			agentIdentity = { ...agentIdentity, ...identity };
 			logger.info("Identity refreshed:", agentIdentity.name);
 		}
-	} catch (e) {
-		logger.warn("Failed to refresh identity:", String(e));
+	} catch (error: unknown) {
+		logger.warn("Failed to refresh identity:", String(error));
 	}
 }
 
@@ -411,8 +421,11 @@ function parseSignalEvent(event: SignalEvent): SignalMessage | null {
 			attachments,
 			quote,
 		};
-	} catch (err) {
-		logger.error("Failed to parse Signal event:", err);
+	} catch (error: unknown) {
+		logger.error(
+			"Failed to parse Signal event:",
+			error instanceof Error ? error.message : String(error),
+		);
 		return null;
 	}
 }
@@ -443,8 +456,11 @@ async function handleIncomingMessage(msg: SignalMessage): Promise<void> {
 				message: msg.text || "[media]",
 				from: msg.sender || msg.from,
 			})
-			.catch((err) => {
-				logger.error("Failed to emit channel:message event:", err);
+			.catch((error: unknown) => {
+				logger.error(
+					"Failed to emit channel:message event:",
+					error instanceof Error ? error.message : String(error),
+				);
 			});
 	}
 
@@ -466,8 +482,11 @@ async function handleIncomingMessage(msg: SignalMessage): Promise<void> {
 			};
 			try {
 				await cmd.handler(cmdCtx);
-			} catch (err) {
-				logger.error(`Command handler '${cmdName}' threw:`, err);
+			} catch (error: unknown) {
+				logger.error(
+					`Command handler '${cmdName}' threw:`,
+					error instanceof Error ? error.message : String(error),
+				);
 			}
 			return;
 		}
@@ -481,8 +500,11 @@ async function handleIncomingMessage(msg: SignalMessage): Promise<void> {
 				typeof parser.pattern === "function"
 					? parser.pattern(text)
 					: parser.pattern.test(text);
-		} catch (err) {
-			logger.error(`Parser '${parser.id}' pattern threw:`, err);
+		} catch (error: unknown) {
+			logger.error(
+				`Parser '${parser.id}' pattern threw:`,
+				error instanceof Error ? error.message : String(error),
+			);
 			continue;
 		}
 		if (matches) {
@@ -496,8 +518,11 @@ async function handleIncomingMessage(msg: SignalMessage): Promise<void> {
 			};
 			try {
 				await parser.handler(parserCtx);
-			} catch (err) {
-				logger.error(`Parser '${parser.id}' handler threw:`, err);
+			} catch (error: unknown) {
+				logger.error(
+					`Parser '${parser.id}' handler threw:`,
+					error instanceof Error ? error.message : String(error),
+				);
 			}
 			return;
 		}
@@ -606,16 +631,19 @@ async function runSseLoop(): Promise<void> {
 			onEvent: (event) => {
 				const msg = parseSignalEvent(event);
 				if (msg) {
-					handleIncomingMessage(msg).catch((err) => {
-						logger.error("Error handling Signal message:", err);
+					handleIncomingMessage(msg).catch((error: unknown) => {
+						logger.error(
+							"Error handling Signal message:",
+							error instanceof Error ? error.message : String(error),
+						);
 					});
 				}
 			},
 		});
-	} catch (err) {
+	} catch (error: unknown) {
 		if (isShuttingDown) return;
 
-		const errorMsg = err instanceof Error ? err.message : String(err);
+		const errorMsg = error instanceof Error ? error.message : String(error);
 		logger.error("Signal SSE error:", errorMsg);
 
 		// Retry with exponential backoff
@@ -624,8 +652,11 @@ async function runSseLoop(): Promise<void> {
 
 		sseRetryTimeout = setTimeout(() => {
 			if (!isShuttingDown) {
-				runSseLoop().catch((err) => {
-					logger.error("Fatal SSE loop error:", err);
+				runSseLoop().catch((error: unknown) => {
+					logger.error(
+						"Fatal SSE loop error:",
+						error instanceof Error ? error.message : String(error),
+					);
 				});
 			}
 		}, retryDelay);
@@ -722,22 +753,27 @@ const plugin: WOPRPlugin = {
 		// Start Signal
 		try {
 			await startSignal();
-		} catch (err) {
-			logger.error("Failed to start Signal:", err);
+		} catch (error: unknown) {
+			logger.error(
+				"Failed to start Signal:",
+				error instanceof Error ? error.message : String(error),
+			);
 			// Don't throw - let plugin load but log the error
 		}
 	},
 
 	async shutdown(): Promise<void> {
+		if (!ctx) return;
 		isShuttingDown = true;
 
 		// Teardown WebMCP tools
 		teardownWebMCP();
 
+		// Unregister config schema
+		if (ctx.unregisterConfigSchema) ctx.unregisterConfigSchema("signal");
+
 		// Unregister channel provider
-		if (ctx) {
-			ctx.unregisterChannelProvider(signalChannelProvider.id);
-		}
+		ctx.unregisterChannelProvider(signalChannelProvider.id);
 
 		// Clear registered commands and parsers
 		registeredCommands.clear();
@@ -754,12 +790,13 @@ const plugin: WOPRPlugin = {
 		}
 
 		if (daemonHandle) {
-			logger.info("Stopping Signal daemon...");
+			logger?.info("Stopping Signal daemon...");
 			daemonHandle.stop();
 			daemonHandle = null;
 		}
 
 		ctx = null;
+		isShuttingDown = false;
 	},
 };
 
