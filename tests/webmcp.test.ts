@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Mock client module
 vi.mock("../src/client.js", () => ({
@@ -38,13 +38,8 @@ vi.mock("winston", () => {
   };
 });
 
-import {
-  initWebMCP,
-  teardownWebMCP,
-  getWebMCPHandlers,
-  webmcpToolDeclarations,
-} from "../src/webmcp.js";
 import { signalCheck, signalRpcRequest } from "../src/client.js";
+import { getWebMCPHandlers, initWebMCP, teardownWebMCP, webmcpToolDeclarations } from "../src/webmcp.js";
 
 describe("webmcpToolDeclarations", () => {
   it("declares exactly three tools", () => {
@@ -54,19 +49,19 @@ describe("webmcpToolDeclarations", () => {
   it("declares getSignalStatus", () => {
     const tool = webmcpToolDeclarations.find((t) => t.name === "getSignalStatus");
     expect(tool).toBeDefined();
-    expect(tool!.description).toContain("connection status");
+    expect(tool?.description).toContain("connection status");
   });
 
   it("declares listSignalChats", () => {
     const tool = webmcpToolDeclarations.find((t) => t.name === "listSignalChats");
     expect(tool).toBeDefined();
-    expect(tool!.description).toContain("conversations");
+    expect(tool?.description).toContain("conversations");
   });
 
   it("declares getSignalMessageStats", () => {
     const tool = webmcpToolDeclarations.find((t) => t.name === "getSignalMessageStats");
     expect(tool).toBeDefined();
-    expect(tool!.description).toContain("statistics");
+    expect(tool?.description).toContain("statistics");
   });
 
   it("all tools have name, description, and parameters", () => {
@@ -141,7 +136,7 @@ describe("getSignalStatus handler", () => {
     // Phone number should be masked, not fully visible
     expect(result.account).not.toBe("+15551234567");
     expect(typeof result.account).toBe("string");
-    expect((result.account as string)).toContain("4567");
+    expect(result.account as string).toContain("4567");
   });
 
   it("returns connected when daemon is reachable", async () => {
@@ -150,9 +145,7 @@ describe("getSignalStatus handler", () => {
       status: 200,
       error: null,
     });
-    vi.mocked(signalRpcRequest).mockResolvedValueOnce([
-      { number: "+15551234567", uuid: "uuid-123", device: 1 },
-    ]);
+    vi.mocked(signalRpcRequest).mockResolvedValueOnce([{ number: "+15551234567", uuid: "uuid-123", device: 1 }]);
 
     initWebMCP({
       getBaseUrl: () => "http://127.0.0.1:8080",
@@ -300,11 +293,11 @@ describe("listSignalChats handler", () => {
 
     const dm = chats.find((c) => c.type === "dm");
     expect(dm).toBeDefined();
-    expect(dm!.messageCount).toBe(2);
+    expect(dm?.messageCount).toBe(2);
 
     const group = chats.find((c) => c.type === "group");
     expect(group).toBeDefined();
-    expect(group!.messageCount).toBe(1);
+    expect(group?.messageCount).toBe(1);
   });
 });
 
@@ -373,9 +366,7 @@ describe("security: no private data exposure", () => {
       status: 200,
       error: null,
     });
-    vi.mocked(signalRpcRequest).mockResolvedValueOnce([
-      { number: "+15551234567", uuid: "uuid-123", device: 1 },
-    ]);
+    vi.mocked(signalRpcRequest).mockResolvedValueOnce([{ number: "+15551234567", uuid: "uuid-123", device: 1 }]);
 
     initWebMCP({
       getBaseUrl: () => "http://127.0.0.1:8080",

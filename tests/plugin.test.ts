@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockContext } from "./mocks/wopr-context.js";
 
 // Mock the client module to prevent real HTTP calls
@@ -69,7 +69,7 @@ describe("signal plugin", () => {
       expect.objectContaining({
         title: "Signal Integration",
         fields: expect.any(Array),
-      })
+      }),
     );
 
     await plugin.shutdown();

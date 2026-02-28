@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // Mock winston before importing source
 vi.mock("winston", () => {
@@ -38,8 +38,8 @@ vi.mock("../src/daemon.js", () => ({
   waitForSignalDaemonReady: vi.fn().mockResolvedValue(undefined),
 }));
 
-import plugin, { parseSignalEvent, normalizeE164 } from "../src/index.js";
 import type { SignalEvent } from "../src/client.js";
+import plugin, { normalizeE164, parseSignalEvent } from "../src/index.js";
 import { createMockContext } from "./mocks/wopr-context.js";
 
 describe("normalizeE164", () => {
@@ -146,14 +146,14 @@ describe("parseSignalEvent", () => {
 
     const result = parseSignalEvent(event);
     expect(result).not.toBeNull();
-    expect(result!.from).toBe("+15551111111");
-    expect(result!.text).toBe("Hello WOPR");
-    expect(result!.isGroup).toBe(false);
-    expect(result!.sender).toBe("Alice");
-    expect(result!.senderNumber).toBe("+15551111111");
-    expect(result!.senderUuid).toBe("uuid-alice");
-    expect(result!.timestamp).toBe(1700000000000);
-    expect(result!.fromMe).toBe(false);
+    expect(result?.from).toBe("+15551111111");
+    expect(result?.text).toBe("Hello WOPR");
+    expect(result?.isGroup).toBe(false);
+    expect(result?.sender).toBe("Alice");
+    expect(result?.senderNumber).toBe("+15551111111");
+    expect(result?.senderUuid).toBe("uuid-alice");
+    expect(result?.timestamp).toBe(1700000000000);
+    expect(result?.fromMe).toBe(false);
   });
 
   it("parses a group message", () => {
@@ -176,9 +176,9 @@ describe("parseSignalEvent", () => {
 
     const result = parseSignalEvent(event);
     expect(result).not.toBeNull();
-    expect(result!.isGroup).toBe(true);
-    expect(result!.groupId).toBe("group-123");
-    expect(result!.text).toBe("Hi everyone");
+    expect(result?.isGroup).toBe(true);
+    expect(result?.groupId).toBe("group-123");
+    expect(result?.text).toBe("Hi everyone");
   });
 
   it("parses message with attachments", () => {
@@ -205,8 +205,8 @@ describe("parseSignalEvent", () => {
 
     const result = parseSignalEvent(event);
     expect(result).not.toBeNull();
-    expect(result!.attachments).toHaveLength(1);
-    expect(result!.attachments![0]).toEqual({
+    expect(result?.attachments).toHaveLength(1);
+    expect(result?.attachments?.[0]).toEqual({
       id: "att-1",
       contentType: "image/png",
       filename: "photo.png",
@@ -234,7 +234,7 @@ describe("parseSignalEvent", () => {
 
     const result = parseSignalEvent(event);
     expect(result).not.toBeNull();
-    expect(result!.quote).toEqual({
+    expect(result?.quote).toEqual({
       text: "Original message",
       author: "+15551111111",
     });
@@ -254,7 +254,7 @@ describe("parseSignalEvent", () => {
 
     const result = parseSignalEvent(event);
     expect(result).not.toBeNull();
-    expect(result!.id).toBe("1700000000000-+15551111111");
+    expect(result?.id).toBe("1700000000000-+15551111111");
   });
 
   it("handles empty message text", () => {
@@ -271,6 +271,6 @@ describe("parseSignalEvent", () => {
 
     const result = parseSignalEvent(event);
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("");
+    expect(result?.text).toBe("");
   });
 });
