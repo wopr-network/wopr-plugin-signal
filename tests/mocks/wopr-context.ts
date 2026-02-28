@@ -1,16 +1,11 @@
 /**
  * Mock WOPRPluginContext for testing wopr-plugin-signal.
  */
-import { vi } from "vitest";
-import type {
-  WOPRPluginContext,
-  AgentIdentity,
-  ConfigSchema,
-} from "@wopr-network/plugin-types";
 
-export function createMockContext(
-  overrides: Partial<WOPRPluginContext> = {}
-): WOPRPluginContext {
+import type { AgentIdentity, WOPRPluginContext } from "@wopr-network/plugin-types";
+import { vi } from "vitest";
+
+export function createMockContext(overrides: Partial<WOPRPluginContext> = {}): WOPRPluginContext {
   const configStore: Record<string, any> = {
     ...(overrides as any)._configData,
   };
