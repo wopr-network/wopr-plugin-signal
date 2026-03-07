@@ -2,6 +2,7 @@
  * WOPR Signal Plugin - signal-cli integration
  */
 
+import crypto from "node:crypto";
 import path from "node:path";
 import type {
   AgentIdentity,
@@ -20,6 +21,25 @@ import winston from "winston";
 import { type SignalEvent, signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
 import { type SignalDaemonHandle, spawnSignalDaemon, waitForSignalDaemonReady } from "./daemon.js";
 import { getWebMCPHandlers, initWebMCP, teardownWebMCP, webmcpToolDeclarations } from "./webmcp.js";
+
+// Notification types (local until plugin-types exports them)
+interface ChannelNotificationPayload {
+  type: string;
+  from?: string;
+  pubkey?: string;
+  [key: string]: unknown;
+}
+
+interface ChannelNotificationCallbacks {
+  onAccept?: () => Promise<void>;
+  onDeny?: () => Promise<void>;
+}
+
+interface PendingNotification {
+  channelId: string;
+  payload: ChannelNotificationPayload;
+  callbacks: ChannelNotificationCallbacks;
+}
 
 // Signal message types
 interface SignalMessage {
@@ -74,6 +94,8 @@ const messageCache: Map<string, SignalMessage> = new Map();
 let sseRetryTimeout: NodeJS.Timeout | null = null;
 let isShuttingDown = false;
 let logger: winston.Logger;
+const pendingNotifications: Map<string, PendingNotification> = new Map();
+let notificationCleanupTimer: NodeJS.Timeout | null = null;
 
 // ============================================================================
 // Channel Provider — allows other plugins to register commands and parsers
@@ -647,6 +669,85 @@ async function startSignal(): Promise<void> {
   }
 }
 
+// ============================================================================
+// Notification support — sendNotification for channel provider
+// ============================================================================
+
+const NOTIFICATION_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function sendNotification(
+  channelId: string,
+  payload: ChannelNotificationPayload,
+  callbacks: ChannelNotificationCallbacks,
+): Promise<void> {
+  if (payload.type !== "friend-request") {
+    throw new Error(`Unsupported notification type: ${payload.type}`);
+  }
+
+  const ownerPhone = config.account;
+  if (!ownerPhone) {
+    throw new Error("Cannot send notification: no Signal account (ownerPhone) configured");
+  }
+
+  const notifId = crypto.randomUUID().slice(0, 8);
+  const fromLabel = payload.from || "unknown";
+
+  pendingNotifications.set(notifId, { channelId, payload, callbacks });
+
+  // Send DM to the bot owner
+  await sendMessageInternal(
+    ownerPhone,
+    `Friend request from ${fromLabel}. Reply ACCEPT ${notifId} or DENY ${notifId}.`,
+  );
+
+  // Register a message parser scoped to ownerPhone sender
+  const parserId = `notif-${crypto.randomUUID()}`;
+  const parser: ChannelMessageParser = {
+    id: parserId,
+    pattern: (text: string) => {
+      const trimmed = text.trim();
+      return (
+        trimmed.toLowerCase() === `accept ${notifId}`.toLowerCase() ||
+        trimmed.toLowerCase() === `deny ${notifId}`.toLowerCase()
+      );
+    },
+    handler: async (msgCtx: ChannelMessageContext) => {
+      // Only accept responses from the owner
+      if (msgCtx.sender !== ownerPhone) return;
+
+      const lower = msgCtx.content.trim().toLowerCase();
+      const pending = pendingNotifications.get(notifId);
+      if (!pending) return;
+
+      try {
+        if (lower === `accept ${notifId}`.toLowerCase() && pending.callbacks.onAccept) {
+          await pending.callbacks.onAccept();
+          await msgCtx.reply("Accepted.");
+        } else if (lower === `deny ${notifId}`.toLowerCase() && pending.callbacks.onDeny) {
+          await pending.callbacks.onDeny();
+          await msgCtx.reply("Denied.");
+        }
+      } finally {
+        pendingNotifications.delete(notifId);
+        signalChannelProvider.removeMessageParser(parserId);
+      }
+    },
+  };
+
+  signalChannelProvider.addMessageParser(parser);
+
+  // TTL: auto-remove after 5 minutes
+  const ttlTimeout = setTimeout(() => {
+    if (pendingNotifications.has(notifId)) {
+      pendingNotifications.delete(notifId);
+      signalChannelProvider.removeMessageParser(parserId);
+      logger?.info(`Notification ${notifId} expired (TTL)`);
+    }
+  }, NOTIFICATION_TTL_MS);
+  // Don't block shutdown
+  ttlTimeout.unref?.();
+}
+
 // Plugin definition
 const plugin: WOPRPlugin = {
   name: "signal",
@@ -710,6 +811,13 @@ const plugin: WOPRPlugin = {
     registeredCommands.clear();
     registeredParsers.clear();
 
+    // Clear pending notifications
+    pendingNotifications.clear();
+    if (notificationCleanupTimer) {
+      clearInterval(notificationCleanupTimer);
+      notificationCleanupTimer = null;
+    }
+
     if (sseRetryTimeout) {
       clearTimeout(sseRetryTimeout);
       sseRetryTimeout = null;
@@ -732,7 +840,15 @@ const plugin: WOPRPlugin = {
 };
 
 // Named exports for testing
-export { normalizeE164, parseSignalEvent, configSchema, signalChannelProvider, pluginManifest, getWebMCPHandlers };
+export {
+  normalizeE164,
+  parseSignalEvent,
+  configSchema,
+  signalChannelProvider,
+  pluginManifest,
+  getWebMCPHandlers,
+  sendNotification,
+};
 export type { SignalConfig, SignalMessage };
 
 export default plugin;
